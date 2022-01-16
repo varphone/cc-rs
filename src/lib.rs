@@ -56,6 +56,7 @@
 #![allow(deprecated)]
 #![deny(missing_docs)]
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::env;
 use std::ffi::{OsStr, OsString};
@@ -400,6 +401,37 @@ impl Build {
     pub fn define<'a, V: Into<Option<&'a str>>>(&mut self, var: &str, val: V) -> &mut Build {
         self.definitions
             .push((var.to_string(), val.into().map(|s| s.to_string())));
+        self
+    }
+
+    /// Specify mulitple `-D` variable with an optional values.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use std::borrow::Cow;
+    ///
+    /// let defs = [
+    ///     (Cow::from("FOO"), Some(Cow::from("BAR"))),
+    ///     (Cow::from("BAZ"), None),
+    ///     (Cow::from("FOO"), Some(Cow::from(format!("{}", "BAR")))),
+    /// ];
+    /// cc::Build::new()
+    ///     .file("src/foo.c")
+    ///     .defines(defs)
+    ///     .compile("foo");
+    /// ```
+    pub fn defines<'a, I, V>(&mut self, iter: I) -> &mut Build
+    where
+        I: IntoIterator<Item = (Cow<'a, str>, V)>,
+        V: Into<Option<Cow<'a, str>>>,
+    {
+        for item in iter
+            .into_iter()
+            .map(|(k, v)| (k.into(), v.into().map(|x| x.into())))
+        {
+            self.definitions.push(item);
+        }
         self
     }
 
