@@ -35,6 +35,15 @@ fn main() {
         .cpp(true)
         .compile("baz");
 
+    cc::Build::new()
+        .file("src/bar1.c")
+        .file("src/bar2.c")
+        .file("src/baz.cpp")
+        .c_flag("-ansi")
+        .cpp_flag("-Wnoexcept")
+        .include("src/include")
+        .compile("baz");
+
     if env::var("CARGO_FEATURE_TEST_CUDA").is_ok() {
         // Detect if there is CUDA compiler and engage "cuda" feature.
         let nvcc = match env::var("NVCC") {
