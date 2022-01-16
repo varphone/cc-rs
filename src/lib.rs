@@ -395,6 +395,40 @@ impl Build {
         self
     }
 
+    /// Specify mulitple `-D` variable with an optional values.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use cc::def;
+    /// let foo_val = format!("{}", "BAR");
+    /// let typ = 123;
+    /// let has_type = format!("HAS_TYPE_{}", typ);
+    /// let defs = [
+    ///     def!("FOO", "BAR"),
+    ///     def!("BAZ"),
+    ///     def!("FOO", foo_val),
+    ///     def!(&has_type, 1),
+    /// ];
+    /// cc::Build::new()
+    ///     .file("src/foo.c")
+    ///     .defines(defs)
+    ///     .compile("foo");
+    /// ```
+    pub fn defines<'a, I, V>(&mut self, iter: I) -> &mut Build
+    where
+        I: IntoIterator<Item = (&'a str, V)>,
+        V: Into<Option<&'a dyn ToString>>,
+    {
+        for item in iter
+            .into_iter()
+            .map(|(k, v)| (k.into(), v.into().map(|x| x.to_string())))
+        {
+            self.definitions.push(item);
+        }
+        self
+    }
+
     /// Add an arbitrary object file to link in
     pub fn object<P: AsRef<Path>>(&mut self, obj: P) -> &mut Build {
         self.objects.push(obj.as_ref().to_path_buf());
@@ -3391,4 +3425,18 @@ fn which(tool: &Path) -> Option<PathBuf> {
         let mut exe = path_entry.join(tool);
         return if check_exe(&mut exe) { Some(exe) } else { None };
     })
+}
+
+/// Reprensents a compiler defintion.
+#[macro_export]
+macro_rules! def {
+    () => {
+        ("", None)
+    };
+    ($k:expr) => {
+        ($k, None)
+    };
+    ($k:expr, $v:expr) => {
+        ($k, Some(&$v as &dyn ToString))
+    };
 }
