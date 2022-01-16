@@ -97,6 +97,8 @@ pub struct Build {
     flags_supported: Vec<String>,
     known_flag_support_status: Arc<Mutex<HashMap<String, bool>>>,
     ar_flags: Vec<String>,
+    c_flags: Vec<String>,
+    cpp_flags: Vec<String>,
     no_default_flags: bool,
     files: Vec<PathBuf>,
     cpp: bool,
@@ -192,6 +194,8 @@ pub struct Tool {
     family: ToolFamily,
     cuda: bool,
     removed_args: Vec<OsString>,
+    c_args: Vec<OsString>,
+    cpp_args: Vec<OsString>,
 }
 
 /// Represents the family of tools this tool belongs to.
@@ -293,6 +297,8 @@ impl Build {
             flags_supported: Vec::new(),
             known_flag_support_status: Arc::new(Mutex::new(HashMap::new())),
             ar_flags: Vec::new(),
+            c_flags: Vec::new(),
+            cpp_flags: Vec::new(),
             no_default_flags: false,
             files: Vec::new(),
             shared_flag: None,
@@ -426,6 +432,36 @@ impl Build {
         self
     }
 
+    /// Add an arbitrary flag to the invocation of the compiler for c files
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// cc::Build::new()
+    ///     .file("src/foo.c")
+    ///     .c_flag("-std=c99")
+    ///     .compile("foo");
+    /// ```
+    pub fn c_flag(&mut self, flag: &str) -> &mut Build {
+        self.c_flags.push(flag.to_string());
+        self
+    }
+
+    /// Add an arbitrary flag to the invocation of the compiler for cpp files
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// cc::Build::new()
+    ///     .file("src/foo.cpp")
+    ///     .cpp_flag("-std=c++17")
+    ///     .compile("foo");
+    /// ```
+    pub fn cpp_flag(&mut self, flag: &str) -> &mut Build {
+        self.cpp_flags.push(flag.to_string());
+        self
+    }
+
     fn ensure_check_file(&self) -> Result<PathBuf, Error> {
         let out_dir = self.get_out_dir()?;
         let src = if self.cuda {
@@ -483,7 +519,7 @@ impl Build {
             compiler.remove_arg("-v".into());
         }
 
-        let mut cmd = compiler.to_command();
+        let mut cmd = compiler.to_command(None);
         let is_arm = target.contains("aarch64") || target.contains("arm");
         let clang = compiler.family == ToolFamily::Clang;
         command_add_output_file(
@@ -1288,7 +1324,7 @@ impl Build {
         let (mut cmd, name) = if msvc && is_asm {
             self.msvc_macro_assembler()?
         } else {
-            let mut cmd = compiler.to_command();
+            let mut cmd = compiler.to_command(Some(&obj.src));
             for &(ref a, ref b) in self.env.iter() {
                 cmd.env(a, b);
             }
@@ -1323,7 +1359,7 @@ impl Build {
     /// This will return a result instead of panicing; see expand() for the complete description.
     pub fn try_expand(&self) -> Result<Vec<u8>, Error> {
         let compiler = self.try_get_compiler()?;
-        let mut cmd = compiler.to_command();
+        let mut cmd = compiler.to_command(None);
         for &(ref a, ref b) in self.env.iter() {
             cmd.env(a, b);
         }
@@ -1463,6 +1499,14 @@ impl Build {
         if self.warnings_into_errors {
             let warnings_to_errors_flag = cmd.family.warnings_to_errors_flag().into();
             cmd.push_cc_arg(warnings_to_errors_flag);
+        }
+
+        for flag in self.c_flags.iter() {
+            cmd.c_args.push(flag.into());
+        }
+
+        for flag in self.cpp_flags.iter() {
+            cmd.cpp_args.push(flag.into());
         }
 
         Ok(cmd)
@@ -1950,7 +1994,7 @@ impl Build {
 
             let out_dir = self.get_out_dir()?;
             let dlink = out_dir.join(lib_name.to_owned() + "_dlink.o");
-            let mut nvcc = self.get_compiler().to_command();
+            let mut nvcc = self.get_compiler().to_command(None);
             nvcc.arg("--device-link")
                 .arg("-o")
                 .arg(dlink.clone())
@@ -2874,6 +2918,8 @@ impl Tool {
             family: family,
             cuda: cuda,
             removed_args: Vec::new(),
+            c_args: Vec::new(),
+            cpp_args: Vec::new(),
         }
     }
 
@@ -2935,14 +2981,59 @@ impl Tool {
     /// This is useful for when the compiler needs to be executed and the
     /// command returned will already have the initial arguments and environment
     /// variables configured.
-    pub fn to_command(&self) -> Command {
+    pub fn to_command(&self, src: Option<&PathBuf>) -> Command {
+        let mut path = self.path.clone();
+        let mut extra_args: &[OsString] = &[];
+        if let Some(src) = src {
+            let mut is_c = false;
+            let mut is_cpp = false;
+            if let Some(ext) = src.extension().and_then(|x| x.to_str()) {
+                match ext {
+                    "c" => {
+                        is_c = true;
+                    }
+                    "cc" | "cpp" | "cxx" => {
+                        is_cpp = true;
+                    }
+                    _ => {}
+                }
+            }
+            match self.family {
+                ToolFamily::Clang => {
+                    let s = path.to_string_lossy().to_string();
+                    if is_c {
+                        path = PathBuf::from(s.replace("clang++", "clang"));
+                        extra_args = &self.c_args;
+                    }
+                    if is_cpp {
+                        if s.ends_with("clang") {
+                            path = PathBuf::from(s.replace("clang", "clang++"));
+                        }
+                        extra_args = &self.cpp_args;
+                    }
+                }
+                ToolFamily::Gnu => {
+                    let s = path.to_string_lossy().to_string();
+                    if is_c {
+                        path = PathBuf::from(s.replace("g++", "gcc"));
+                        extra_args = &self.c_args;
+                    }
+                    if is_cpp {
+                        path = PathBuf::from(s.replace("gcc", "g++"));
+                        extra_args = &self.cpp_args;
+                    }
+                }
+                _ => {}
+            }
+        }
+
         let mut cmd = match self.cc_wrapper_path {
             Some(ref cc_wrapper_path) => {
                 let mut cmd = Command::new(&cc_wrapper_path);
-                cmd.arg(&self.path);
+                cmd.arg(&path);
                 cmd
             }
-            None => Command::new(&self.path),
+            None => Command::new(&path),
         };
         cmd.args(&self.cc_wrapper_args);
 
@@ -2952,6 +3043,8 @@ impl Tool {
             .filter(|a| !self.removed_args.contains(a))
             .collect::<Vec<_>>();
         cmd.args(&value);
+
+        cmd.args(extra_args);
 
         for &(ref k, ref v) in self.env.iter() {
             cmd.env(k, v);
