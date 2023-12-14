@@ -33,7 +33,7 @@ const MSVC_FAMILY: ToolFamily = ToolFamily::Msvc { clang_cl: false };
 ///
 /// Note that this function always returns `None` for non-MSVC targets.
 pub fn find(target: &str, tool: &str) -> Option<Command> {
-    find_tool(target, tool).map(|c| c.to_command())
+    find_tool(target, tool).map(|c| c.to_command(None))
 }
 
 /// Similar to the `find` function above, this function will attempt the same

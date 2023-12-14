@@ -104,6 +104,8 @@ pub struct Build {
     known_flag_support_status: Arc<Mutex<HashMap<String, bool>>>,
     ar_flags: Vec<Arc<str>>,
     asm_flags: Vec<Arc<str>>,
+    c_flags: Vec<Arc<str>>,
+    cpp_flags: Vec<Arc<str>>,
     no_default_flags: bool,
     files: Vec<Arc<Path>>,
     cpp: bool,
@@ -199,6 +201,8 @@ pub struct Tool {
     cc_wrapper_path: Option<PathBuf>,
     cc_wrapper_args: Vec<OsString>,
     args: Vec<OsString>,
+    c_args: Vec<OsString>,
+    cpp_args: Vec<OsString>,
     env: Vec<(OsString, OsString)>,
     family: ToolFamily,
     cuda: bool,
@@ -310,6 +314,8 @@ impl Build {
             known_flag_support_status: Arc::new(Mutex::new(HashMap::new())),
             ar_flags: Vec::new(),
             asm_flags: Vec::new(),
+            c_flags: Vec::new(),
+            cpp_flags: Vec::new(),
             no_default_flags: false,
             files: Vec::new(),
             shared_flag: None,
@@ -484,6 +490,36 @@ impl Build {
         self
     }
 
+    /// Add an arbitrary flag to the invocation of the compiler for c files
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// cc::Build::new()
+    ///     .file("src/foo.c")
+    ///     .c_flag("-std=c99")
+    ///     .compile("foo");
+    /// ```
+    pub fn c_flag(&mut self, flag: &str) -> &mut Build {
+        self.c_flags.push(flag.into());
+        self
+    }
+
+    /// Add an arbitrary flag to the invocation of the compiler for cpp files
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// cc::Build::new()
+    ///     .file("src/foo.cpp")
+    ///     .cpp_flag("-std=c++17")
+    ///     .compile("foo");
+    /// ```
+    pub fn cpp_flag(&mut self, flag: &str) -> &mut Build {
+        self.cpp_flags.push(flag.into());
+        self
+    }
+
     fn ensure_check_file(&self) -> Result<PathBuf, Error> {
         let out_dir = self.get_out_dir()?;
         let src = if self.cuda {
@@ -549,7 +585,7 @@ impl Build {
             compiler.push_cc_arg("-Wno-unused-command-line-argument".into());
         }
 
-        let mut cmd = compiler.to_command();
+        let mut cmd = compiler.to_command(None);
         let is_arm = target.contains("aarch64") || target.contains("arm");
         let clang = compiler.family == ToolFamily::Clang;
         let gnu = compiler.family == ToolFamily::Gnu;
@@ -1484,7 +1520,7 @@ impl Build {
         let (mut cmd, name) = if is_assembler_msvc {
             self.msvc_macro_assembler()?
         } else {
-            let mut cmd = compiler.to_command();
+            let mut cmd = compiler.to_command(Some(&obj.src));
             for &(ref a, ref b) in self.env.iter() {
                 cmd.env(a, b);
             }
@@ -1530,7 +1566,7 @@ impl Build {
     /// This will return a result instead of panicing; see expand() for the complete description.
     pub fn try_expand(&self) -> Result<Vec<u8>, Error> {
         let compiler = self.try_get_compiler()?;
-        let mut cmd = compiler.to_command();
+        let mut cmd = compiler.to_command(None);
         for &(ref a, ref b) in self.env.iter() {
             cmd.env(a, b);
         }
@@ -1677,6 +1713,14 @@ impl Build {
         if self.warnings_into_errors {
             let warnings_to_errors_flag = cmd.family.warnings_to_errors_flag().into();
             cmd.push_cc_arg(warnings_to_errors_flag);
+        }
+
+        for flag in self.c_flags.iter() {
+            cmd.c_args.push((**flag).into());
+        }
+
+        for flag in self.cpp_flags.iter() {
+            cmd.cpp_args.push((**flag).into());
         }
 
         Ok(cmd)
@@ -2261,7 +2305,7 @@ impl Build {
 
             let out_dir = self.get_out_dir()?;
             let dlink = out_dir.join(lib_name.to_owned() + "_dlink.o");
-            let mut nvcc = self.get_compiler().to_command();
+            let mut nvcc = self.get_compiler().to_command(None);
             nvcc.arg("--device-link").arg("-o").arg(&dlink).arg(dst);
             run(&mut nvcc, "nvcc", print)?;
             self.assemble_progressive(dst, &[dlink.as_path()], print)?;
@@ -3497,6 +3541,8 @@ impl Tool {
             cc_wrapper_path: None,
             cc_wrapper_args: Vec::new(),
             args: Vec::new(),
+            c_args: Vec::new(),
+            cpp_args: Vec::new(),
             env: Vec::new(),
             family: family,
             cuda: false,
@@ -3558,6 +3604,8 @@ impl Tool {
             cc_wrapper_path: None,
             cc_wrapper_args: Vec::new(),
             args: Vec::new(),
+            c_args: Vec::new(),
+            cpp_args: Vec::new(),
             env: Vec::new(),
             family: family,
             cuda: cuda,
@@ -3625,19 +3673,69 @@ impl Tool {
         }
     }
 
+    /// Returns preferred compiler for source file.
+    fn preferred_compiler_for_source(&self, src: Option<&PathBuf>) -> (PathBuf, &[OsString]) {
+        let mut path = self.path.clone();
+        let mut extra_args: &[OsString] = &[];
+        if let Some(src) = src {
+            let mut is_c = false;
+            let mut is_cpp = false;
+            if let Some(ext) = src.extension().and_then(|x| x.to_str()) {
+                match ext {
+                    "c" => {
+                        is_c = true;
+                    }
+                    "cc" | "cpp" | "cxx" => {
+                        is_cpp = true;
+                    }
+                    _ => {}
+                }
+            }
+            match self.family {
+                ToolFamily::Clang => {
+                    let s = path.to_string_lossy().to_string();
+                    if is_c {
+                        path = PathBuf::from(s.replace("clang++", "clang"));
+                        extra_args = &self.c_args;
+                    }
+                    if is_cpp {
+                        if s.ends_with("clang") {
+                            path = PathBuf::from(s.replace("clang", "clang++"));
+                        }
+                        extra_args = &self.cpp_args;
+                    }
+                }
+                ToolFamily::Gnu => {
+                    let s = path.to_string_lossy().to_string();
+                    if is_c {
+                        path = PathBuf::from(s.replace("g++", "gcc"));
+                        extra_args = &self.c_args;
+                    }
+                    if is_cpp {
+                        path = PathBuf::from(s.replace("gcc", "g++"));
+                        extra_args = &self.cpp_args;
+                    }
+                }
+                _ => {}
+            }
+        }
+        (path, extra_args)
+    }
+
     /// Converts this compiler into a `Command` that's ready to be run.
     ///
     /// This is useful for when the compiler needs to be executed and the
     /// command returned will already have the initial arguments and environment
     /// variables configured.
-    pub fn to_command(&self) -> Command {
+    pub fn to_command(&self, src: Option<&PathBuf>) -> Command {
+        let (path, extra_args) = self.preferred_compiler_for_source(src);
         let mut cmd = match self.cc_wrapper_path {
             Some(ref cc_wrapper_path) => {
                 let mut cmd = Command::new(&cc_wrapper_path);
-                cmd.arg(&self.path);
+                cmd.arg(&path);
                 cmd
             }
-            None => Command::new(&self.path),
+            None => Command::new(&path),
         };
         cmd.args(&self.cc_wrapper_args);
 
@@ -3647,6 +3745,8 @@ impl Tool {
             .filter(|a| !self.removed_args.contains(a))
             .collect::<Vec<_>>();
         cmd.args(&value);
+
+        cmd.args(extra_args);
 
         for &(ref k, ref v) in self.env.iter() {
             cmd.env(k, v);
