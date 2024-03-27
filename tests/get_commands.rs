@@ -10,7 +10,11 @@ fn flag_propagates_to_compiler() {
     assert!(compiler.args().contains(&"--foo".into()));
 
     let predicate = |arg: &&OsStr| *arg == "--foo";
-    assert!(compiler.to_command().get_args().find(predicate).is_some());
+    assert!(compiler
+        .to_command(None)
+        .get_args()
+        .find(predicate)
+        .is_some());
 }
 
 #[test]
@@ -20,7 +24,11 @@ fn env_propagates_to_compiler() {
     assert!(compiler.env().contains(&("FOO".into(), "BAR".into())));
 
     let predicate = |(key, val): &(&OsStr, Option<&OsStr>)| *key == "FOO" && val.unwrap() == "BAR";
-    assert!(compiler.to_command().get_envs().find(predicate).is_some());
+    assert!(compiler
+        .to_command(None)
+        .get_envs()
+        .find(predicate)
+        .is_some());
 }
 
 #[test]

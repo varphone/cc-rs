@@ -382,6 +382,8 @@ pub struct Build {
     flags_supported: Vec<Arc<OsStr>>,
     ar_flags: Vec<Arc<OsStr>>,
     asm_flags: Vec<Arc<OsStr>>,
+    c_flags: Vec<Arc<OsStr>>,
+    cpp_flags: Vec<Arc<OsStr>>,
     no_default_flags: bool,
     files: Vec<Arc<Path>>,
     cpp: bool,
@@ -514,6 +516,8 @@ impl Build {
             flags_supported: Vec::new(),
             ar_flags: Vec::new(),
             asm_flags: Vec::new(),
+            c_flags: Vec::new(),
+            cpp_flags: Vec::new(),
             no_default_flags: false,
             files: Vec::new(),
             shared_flag: None,
@@ -721,6 +725,36 @@ impl Build {
     /// ```
     pub fn asm_flag(&mut self, flag: impl AsRef<OsStr>) -> &mut Build {
         self.asm_flags.push(flag.as_ref().into());
+        self
+    }
+
+    /// Add an arbitrary flag to the invocation of the compiler for c files
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// cc::Build::new()
+    ///     .file("src/foo.c")
+    ///     .c_flag("-std=c99")
+    ///     .compile("foo");
+    /// ```
+    pub fn c_flag(&mut self, flag: impl AsRef<OsStr>) -> &mut Build {
+        self.c_flags.push(flag.as_ref().into());
+        self
+    }
+
+    /// Add an arbitrary flag to the invocation of the compiler for cpp files
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// cc::Build::new()
+    ///     .file("src/foo.cpp")
+    ///     .cpp_flag("-std=c++17")
+    ///     .compile("foo");
+    /// ```
+    pub fn cpp_flag(&mut self, flag: impl AsRef<OsStr>) -> &mut Build {
+        self.cpp_flags.push(flag.as_ref().into());
         self
     }
 
@@ -1515,7 +1549,7 @@ impl Build {
             compiler.push_cc_arg("-Wno-unused-command-line-argument".into());
         }
 
-        let mut cmd = compiler.to_command();
+        let mut cmd = compiler.to_command(None);
         command_add_output_file(
             &mut cmd,
             &obj,
@@ -1830,7 +1864,7 @@ impl Build {
         let mut cmd = if is_assembler_msvc {
             self.msvc_macro_assembler()?
         } else {
-            compiler.to_command()
+            compiler.to_command(Some(&obj.src))
         };
         let is_arm = is_arm(&target);
         command_add_output_file(
@@ -1877,7 +1911,7 @@ impl Build {
     /// the complete description.
     pub fn try_expand(&self) -> Result<Vec<u8>, Error> {
         let compiler = self.try_get_compiler()?;
-        let mut cmd = compiler.to_command();
+        let mut cmd = compiler.to_command(None);
         cmd.arg("-E");
 
         assert!(
@@ -2073,6 +2107,13 @@ impl Build {
         // Do this last, to allow overwriting the other values above.
         for (key, val) in &self.env {
             cmd.env.push((key.into(), val.into()));
+        }
+
+        for flag in self.c_flags.iter() {
+            cmd.c_args.push((**flag).into());
+        }
+        for flag in self.cpp_flags.iter() {
+            cmd.cpp_args.push((**flag).into());
         }
 
         Ok(cmd)
@@ -2693,7 +2734,7 @@ impl Build {
 
             let out_dir = self.get_out_dir()?;
             let dlink = out_dir.join(lib_name.to_owned() + "_dlink.o");
-            let mut nvcc = self.get_compiler().to_command();
+            let mut nvcc = self.get_compiler().to_command(None);
             nvcc.arg("--device-link").arg("-o").arg(&dlink).arg(dst);
             run(&mut nvcc, &self.cargo_output)?;
             self.assemble_progressive(dst, &[dlink.as_path()], &mut deterministic_ar)?;
@@ -4280,7 +4321,7 @@ impl Build {
 
     fn find_msvc_tools_find(&self, target: &TargetInfo<'_>, tool: &str) -> Option<Command> {
         self.find_msvc_tools_find_tool(target, tool)
-            .map(|c| c.to_command())
+            .map(|c| c.to_command(None))
     }
 
     fn find_msvc_tools_find_tool(&self, target: &TargetInfo<'_>, tool: &str) -> Option<Tool> {
