@@ -6,6 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.17](https://github.com/varphone/cc-rs/compare/cc-v1.2.16...cc-v1.2.17) - 2025-03-14
+
+### Other
+
+- Regenerate target info ([#1429](https://github.com/varphone/cc-rs/pull/1429))
+- Added base support for `wasm32-wali-linux-musl` target ([#1373](https://github.com/varphone/cc-rs/pull/1373))
+
 ## [1.2.16](https://github.com/rust-lang/cc-rs/compare/cc-v1.2.15...cc-v1.2.16) - 2025-02-28
 
 ### Fixed
